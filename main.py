@@ -54,37 +54,22 @@ def decode_audio_base64(audio_base64: str) -> bytes:
     return base64.b64decode(audio_base64)
 
 
-def transcribe_audio(audio_bytes: bytes, audio_format: str = "wav") -> str:
+def transcribe_audio(audio_bytes: bytes) -> str:
     """
-    Uses gpt-4o-audio-preview via chat completions with input_audio content.
-    This sends a JSON body (not multipart), which aipipe's proxy supports
-    for cost tracking. whisper-1's multipart /audio/transcriptions endpoint
-    is NOT supported by aipipe.
+    Uses gpt-4o-transcribe via the standard /audio/transcriptions endpoint.
+    NOTE: whisper-1 does NOT return usage data, so aipipe rejects it
+    ("Pass a JSON body with {model} so we can calculate cost").
+    gpt-4o-transcribe DOES return usage data, so it works with aipipe.
+    gpt-4o-audio-preview is deprecated (404) — do not use it.
     """
-    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-    response = client.chat.completions.create(
-        model="gpt-4o-audio-preview",
-        modalities=["text"],
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Transcribe this audio exactly, word for word. Return only the transcription text, nothing else.",
-                    },
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": audio_b64,
-                            "format": audio_format,
-                        },
-                    },
-                ],
-            }
-        ],
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "audio.wav"
+    resp = client.audio.transcriptions.create(
+        model="gpt-4o-transcribe",
+        file=audio_file,
+        # language="ko",  # uncomment if audio is always Korean
     )
-    return response.choices[0].message.content
+    return resp.text
 
 
 def parse_transcript_to_dataframe(transcript: str) -> pd.DataFrame:
@@ -143,7 +128,7 @@ def home():
 @app.post("/answer-audio")
 def answer_audio(req: AudioRequest):
     audio_bytes = decode_audio_base64(req.audio_base64)
-    transcript = transcribe_audio(audio_bytes, audio_format="wav")
+    transcript = transcribe_audio(audio_bytes)
     print(f"TRANSCRIPT for {req.audio_id}: {transcript}")  # visible in Render logs
     df = parse_transcript_to_dataframe(transcript)
     return compute_stats(df)
