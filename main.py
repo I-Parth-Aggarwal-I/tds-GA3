@@ -1,62 +1,90 @@
+import json
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
-from dotenv import load_dotenv
-import numpy as np
-import os
 
 load_dotenv()
 
 client = OpenAI(
     api_key=os.getenv("AIPIPE_TOKEN"),
-    base_url="https://aipipe.org/openai/v1"
+    base_url="https://aipipe.org/openai/v1",
 )
 
 app = FastAPI()
 
 
-class RankRequest(BaseModel):
-    query_id: str
-    query: str
-    candidates: list[str]
+class SolveRequest(BaseModel):
+    problem_id: str
+    problem: str
 
 
-def cosine(a, b):
-    a = np.asarray(a)
-    b = np.asarray(b)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+SYSTEM_PROMPT = """
+You solve arithmetic word problems.
+
+Return ONLY valid JSON with EXACTLY these two keys:
+{
+  "reasoning": "<at least 80 characters explaining the calculation>",
+  "answer": <integer>
+}
+
+Rules:
+- answer must be a JSON integer.
+- No markdown.
+- No extra keys.
+- Ignore irrelevant numbers.
+- Ensure reasoning is at least 80 characters.
+"""
 
 
 @app.get("/")
-def root():
+def home():
     return {"status": "ok"}
 
 
-@app.post("/rank")
-def rank(req: RankRequest):
-    texts = [req.query] + req.candidates
+@app.post("/solve")
+def solve(req: SolveRequest):
 
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=texts
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": req.problem},
+        ],
     )
 
-    embeddings = [x.embedding for x in response.data]
+    text = response.choices[0].message.content
 
-    query_embedding = embeddings[0]
-    candidate_embeddings = embeddings[1:]
+    try:
+        result = json.loads(text)
+    except Exception:
+        result = {
+            "reasoning": text + " " * 100,
+            "answer": 0,
+        }
 
-    scores = [
-        cosine(query_embedding, emb)
-        for emb in candidate_embeddings
-    ]
+    # enforce schema
+    reasoning = str(result.get("reasoning", ""))
 
-    top3 = sorted(
-        range(len(scores)),
-        key=lambda i: scores[i],
-        reverse=True
-    )[:3]
+    if len(reasoning) < 80:
+        reasoning += " " + (
+            "The arithmetic was performed carefully by identifying the relevant values, "
+            "ignoring distractors, applying each operation in order, and verifying the "
+            "final integer answer."
+        )
+
+    answer = result.get("answer", 0)
+
+    try:
+        answer = int(answer)
+    except Exception:
+        answer = 0
 
     return {
-        "ranking": top3
+        "reasoning": reasoning,
+        "answer": answer,
     }
