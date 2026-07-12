@@ -26,10 +26,22 @@ app.add_middleware(
 whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
 
 # Warm up the model once at import time so the *first* real request isn't
-# also paying for JIT/graph warm-up inside the 12s budget.
+# also paying for JIT/graph warm-up inside the 12s budget. Must match the
+# real transcribe_audio() call's parameters exactly — especially
+# vad_filter=True, which lazily loads a separate ONNX VAD model on first
+# use. If warm-up doesn't trigger that same load, it happens during the
+# first real (timed) request instead, which is what caused the timeout.
 import numpy as np
 _dummy_audio = np.zeros(16000, dtype=np.float32)  # 1s of silence at 16kHz
-list(whisper_model.transcribe(_dummy_audio, language="ko", beam_size=1)[0])
+list(
+    whisper_model.transcribe(
+        _dummy_audio,
+        language="ko",
+        beam_size=1,
+        vad_filter=True,
+        condition_on_previous_text=False,
+    )[0]
+)
 
 
 class AudioRequest(BaseModel):
