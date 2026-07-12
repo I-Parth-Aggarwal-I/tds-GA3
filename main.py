@@ -79,7 +79,11 @@ def sniff_audio_extension(audio_bytes: bytes) -> str:
     header = audio_bytes[:12]
     if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
         return ".wav"
-    if header[:3] == b"ID3" or header[:2] == b"\xff\xfb":
+    # MP3 frame sync: first byte 0xFF, second byte's top 3+ bits also set
+    # (covers 0xFFFB, 0xFFF3, 0xFFFA, 0xFFE3, etc. — not just one exact pair)
+    if header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+        return ".mp3"
+    if header[:3] == b"ID3":
         return ".mp3"
     if header[:4] == b"OggS":
         return ".ogg"
@@ -105,14 +109,18 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
-        segments, info = whisper_model.transcribe(
-            tmp.name,
-            language="ko",  # force Korean; remove/auto-detect if clips aren't all Korean
-            beam_size=1,  # greedy decoding — much faster than beam_size=5
-            vad_filter=True,  # skip silence, speeds up short clips
-            condition_on_previous_text=False,
-        )
-        text = " ".join(seg.text.strip() for seg in segments)
+        try:
+            segments, info = whisper_model.transcribe(
+                tmp.name,
+                language="ko",  # force Korean; remove/auto-detect if clips aren't all Korean
+                beam_size=1,  # greedy decoding — much faster than beam_size=5
+                vad_filter=True,  # skip silence, speeds up short clips
+                condition_on_previous_text=False,
+            )
+            text = " ".join(seg.text.strip() for seg in segments)
+        except Exception as e:
+            print(f"TRANSCRIBE ERROR: {type(e).__name__}: {e}")
+            raise
     return text.strip()
 
 
