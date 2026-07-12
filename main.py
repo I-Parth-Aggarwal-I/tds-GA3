@@ -1,13 +1,18 @@
-import os
 import json
+import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from openai import OpenAI
+from pydantic import BaseModel
 
 load_dotenv()
+
+client = OpenAI(
+    api_key=os.getenv("AIPIPE_TOKEN"),
+    base_url="https://aipipe.org/openai/v1"
+)
 
 app = FastAPI()
 
@@ -19,24 +24,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(
-    api_key=os.getenv("AIPIPE_TOKEN"),
-    base_url="https://aipipe.org/openai/v1",
-)
-
-MODEL = "gpt-4.1-mini"
-
 
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
 
 SYSTEM_PROMPT = """
-You are an invoice extraction engine.
+Extract invoice information.
 
-Extract the following fields.
-
-Return ONLY valid JSON.
+Return ONLY valid JSON with EXACTLY these six keys:
 
 {
   "invoice_no": string|null,
@@ -48,41 +44,38 @@ Return ONLY valid JSON.
 }
 
 Rules:
+
 - date must be YYYY-MM-DD
-- amount is subtotal before tax
-- tax is only the tax amount
-- Return null if a field is missing
-- No markdown
+- amount = subtotal BEFORE tax
+- tax = tax amount only
+- currency should be ISO code such as INR, USD, EUR
+- Missing fields must be null.
+- No markdown.
 """
 
 
 @app.get("/")
 def root():
-    return {"status": "running"}
+    return {"status": "ok"}
 
 
 @app.post("/extract")
 def extract(req: InvoiceRequest):
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model="gpt-4.1-mini",
         temperature=0,
         response_format={"type": "json_object"},
         messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": req.invoice_text,
-            },
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": req.invoice_text},
         ],
     )
 
     result = json.loads(response.choices[0].message.content)
 
-    return {
+    # Ensure all required keys exist
+    output = {
         "invoice_no": result.get("invoice_no"),
         "date": result.get("date"),
         "vendor": result.get("vendor"),
@@ -90,3 +83,5 @@ def extract(req: InvoiceRequest):
         "tax": result.get("tax"),
         "currency": result.get("currency"),
     }
+
+    return output
