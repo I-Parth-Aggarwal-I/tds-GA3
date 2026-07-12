@@ -1,13 +1,9 @@
-import base64
+from fastapi import FastAPI
+from pydantic import BaseModel
+from openai import OpenAI
+from dotenv import load_dotenv
 import json
 import os
-import tempfile
-
-import pandas as pd
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from openai import OpenAI
-from pydantic import BaseModel
 
 load_dotenv()
 
@@ -18,65 +14,69 @@ client = OpenAI(
 
 app = FastAPI()
 
-class AudioRequest(BaseModel):
-    audio_id: str
-    audio_base64: str
+
+class ExtractRequest(BaseModel):
+    text: str
+    schema: dict
 
 
 SYSTEM_PROMPT = """
-You will receive a transcript of a spoken dataset.
+You are an information extraction engine.
 
-Infer the complete dataset.
+You will receive:
 
-Return ONLY JSON having exactly these keys:
+1. Text
+2. A schema describing required fields and types.
 
-rows
-columns
-mean
-std
-variance
-min
-max
-median
-mode
-range
-allowed_values
-value_range
-correlation
+Rules:
 
-Do NOT return markdown.
-Compute every statistic exactly.
+- Return EXACTLY the keys in schema.
+- Never add extra keys.
+- Missing values become null.
+- integer -> JSON integer
+- float -> JSON number
+- boolean -> true/false
+- date -> YYYY-MM-DD
+- array[string] -> JSON array
+- array[integer] -> JSON array of integers
+
+Return ONLY JSON.
 """
 
-@app.post("/analyse")
-@app.post("/analyze")
-async def analyze(req: AudioRequest):
 
-    audio = base64.b64decode(req.audio_base64)
+@app.get("/")
+def home():
+    return {"status": "ok"}
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(audio)
-        path = f.name
 
-    try:
-        with open(path, "rb") as f:
-            transcript = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",
-                file=f
-            ).text
-    except Exception as e:
-        return {"error": str(e)}
+@app.post("/dynamic-extract")
+def extract(req: ExtractRequest):
+
+    schema_description = json.dumps(req.schema, indent=2)
 
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
         temperature=0,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": transcript}
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content":
+f"""TEXT
+
+{req.text}
+
+SCHEMA
+
+{schema_description}
+
+Return JSON only."""
+            }
         ]
     )
-
-    os.remove(path)
 
     return json.loads(response.choices[0].message.content)
