@@ -1,4 +1,6 @@
 fastapi
 uvicorn
-openai>=1.0.0
+openai
 python-dotenv
+pandas
+numpy
