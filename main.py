@@ -48,7 +48,7 @@ Do NOT return markdown.
 Compute every statistic exactly.
 """
 
-
+@app.post("/analyze")
 @app.post("/analyze")
 async def analyze(req: AudioRequest):
 
@@ -58,11 +58,14 @@ async def analyze(req: AudioRequest):
         f.write(audio)
         path = f.name
 
-    with open(path, "rb") as f:
-        transcript = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=f
-        ).text
+    try:
+        with open(path, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="gpt-4o-transcribe",
+                file=f
+            ).text
+    except Exception as e:
+        return {"error": str(e)}
 
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
