@@ -1,97 +1,93 @@
+import base64
+import json
 import os
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
 from pydantic import BaseModel
-
-import requests
 
 load_dotenv()
 
-TOKEN = os.getenv("AIPIPE_TOKEN")
-print("TOKEN loaded:", TOKEN is not None)
-print("Length:", len(TOKEN) if TOKEN else 0)
+client = OpenAI(
+    api_key=os.getenv("AIPIPE_TOKEN"),
+    base_url="https://aipipe.org/openai/v1",
+)
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class RequestModel(BaseModel):
+
+class ImageRequest(BaseModel):
     image_base64: str
     question: str
 
-class ResponseModel(BaseModel):
-    answer: str
+
+SYSTEM_PROMPT = """
+Answer the user's question using only the image.
+
+Return ONLY JSON:
+
+{
+  "answer":"..."
+}
+
+Rules:
+- answer must always be a string.
+- If the answer is numeric, return only the number.
+- Do not include currency symbols.
+- Do not include units.
+- Do not include markdown.
+"""
 
 
 @app.get("/")
 def home():
-    return {"status":"running"}
+    return {"status": "ok"}
 
 
-@app.post("/answer-image", response_model=ResponseModel)
-def answer(req: RequestModel):
+@app.post("/answer-image")
+def answer_image(req: ImageRequest):
 
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type":"application/json"
-    }
+    image_url = f"data:image/png;base64,{req.image_base64}"
 
-    payload = {
-        "model":"openai/gpt-4.1-mini",
-        "messages":[
+    response = client.chat.completions.create(
+        model="gpt-4.1",
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
             {
-                "role":"user",
-                "content":[
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": [
                     {
-                        "type":"text",
-                        "text":f"""
-Answer the question from the image.
-
-Question:
-{req.question}
-
-Rules:
-
-Return ONLY the answer.
-
-If numeric:
-return only the number.
-
-No explanation.
-No currency.
-No units.
-"""
+                        "type": "text",
+                        "text": req.question
                     },
                     {
-                        "type":"image_url",
-                        "image_url":{
-                            "url":f"data:image/png;base64,{req.image_base64}"
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
                         }
                     }
                 ]
             }
         ]
-    }
-
-    r = requests.post(
-        "https://aipipe.org/openrouter/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=120
     )
 
-    r.raise_for_status()
-
-    answer = r.json()["choices"][0]["message"]["content"].strip()
+    result = json.loads(response.choices[0].message.content)
 
     return {
-        "answer":answer
+        "answer": str(result.get("answer", ""))
     }
