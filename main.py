@@ -16,75 +16,44 @@ client = OpenAI(
 app = FastAPI()
 
 
-class SolveRequest(BaseModel):
-    problem_id: str
-    problem: str
-
-
-SYSTEM_PROMPT = """
-You solve arithmetic word problems.
-
-Return ONLY valid JSON with EXACTLY these two keys:
-{
-  "reasoning": "<at least 80 characters explaining the calculation>",
-  "answer": <integer>
-}
-
-Rules:
-- answer must be a JSON integer.
-- No markdown.
-- No extra keys.
-- Ignore irrelevant numbers.
-- Ensure reasoning is at least 80 characters.
-"""
+class ExtractRequest(BaseModel):
+    document_id: str
+    text: str
+    schema: dict
 
 
 @app.get("/")
-def home():
+def root():
     return {"status": "ok"}
 
 
-@app.post("/solve")
-def solve(req: SolveRequest):
+@app.post("/extract")
+def extract(req: ExtractRequest):
 
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
         temperature=0,
-        response_format={"type": "json_object"},
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "invoice",
+                "schema": req.schema,
+            },
+        },
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": req.problem},
+            {
+                "role": "system",
+                "content": (
+                    "Extract invoice information from the document. "
+                    "Return ONLY JSON matching the provided schema exactly. "
+                    "Normalize dates, currencies, numbers and booleans as requested."
+                ),
+            },
+            {
+                "role": "user",
+                "content": req.text,
+            },
         ],
     )
 
-    text = response.choices[0].message.content
-
-    try:
-        result = json.loads(text)
-    except Exception:
-        result = {
-            "reasoning": text + " " * 100,
-            "answer": 0,
-        }
-
-    # enforce schema
-    reasoning = str(result.get("reasoning", ""))
-
-    if len(reasoning) < 80:
-        reasoning += " " + (
-            "The arithmetic was performed carefully by identifying the relevant values, "
-            "ignoring distractors, applying each operation in order, and verifying the "
-            "final integer answer."
-        )
-
-    answer = result.get("answer", 0)
-
-    try:
-        answer = int(answer)
-    except Exception:
-        answer = 0
-
-    return {
-        "reasoning": reasoning,
-        "answer": answer,
-    }
+    return json.loads(response.choices[0].message.content)
